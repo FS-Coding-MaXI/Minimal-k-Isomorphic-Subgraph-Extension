@@ -17,3 +17,7 @@ path = "src/bin/exact_solver.rs"
 [[bin]]
 name = "approx-solver"
 path = "src/bin/approx_solver.rs"
+
+[[bin]]
+name = "input-generator"
+path = "src/bin/input_generator.rs"

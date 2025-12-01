@@ -45,7 +45,7 @@ This project provides two solution approaches:
 ## Building
 
 ```bash
-# Build both solvers
+# Build all binaries (exact solver, approx solver, input generator)
 cargo build --release
 
 # Build only exact solver
@@ -53,6 +53,9 @@ cargo build --release --bin exact-solver
 
 # Build only approximation solver
 cargo build --release --bin approx-solver
+
+# Build only input generator
+cargo build --release --bin input-generator
 ```
 
 ## Running
@@ -81,6 +84,21 @@ cargo run --release --bin approx-solver -- --input examples/example1.txt --k 2
 ./target/release/approx-solver --input examples/example6_large.txt --k 5 -t 100
 ```
 
+### Input Generator
+
+```bash
+# Basic instance (writes to file)
+cargo run --release --bin input-generator -- --n1 3 --n2 6 --output examples/generated_3_6.txt
+
+# Instance with custom densities and seed
+cargo run --release --bin input-generator -- --n1 5 --n2 9 --density-g 0.5 --density-h 0.15 --seed 12345 --output examples/generated_5_9.txt
+
+# Instance disabling noise
+cargo run --release --bin input-generator -- --n1 4 --n2 10 --noise false --output examples/generated_4_10_no_noise.txt
+```
+
+Generates a problem instance (two graphs G then H) with a partially satisfied hidden embedding; the raw file contains only the numeric format (no comments). Generation statistics are printed to stdout, while the instance itself is always written to the specified output path.
+
 ### Command Line Arguments
 
 **Exact Solver:**
@@ -94,6 +112,21 @@ cargo run --release --bin approx-solver -- --input examples/example1.txt --k 2
   - Number of trials per mapping = n₁ × n₂ × multiplier
   - Higher values increase computation time but may improve solution quality
   - Recommended: 1 for quick results, 10-100 for better quality on hard instances
+
+**Input Generator:**
+- `--n1 <number>`: Vertex count of pattern graph G (must be > 0)
+- `--n2 <number>`: Vertex count of host graph H (must be > n1)
+- `--density-g <float>`: Edge probability for G (default: 0.35)
+- `--density-h <float>`: Edge probability for base H (default: 0.20)
+- `--multiedge-prob <float>`: Probability an existing edge becomes multiedge (default: 0.15)
+- `--max-multiedge <number>`: Max multiplicity for multiedges (default: 4)
+- `--embed-strength <float>`: Fraction of G edges forced satisfied in H under a hidden mapping (default: 0.40)
+- `--deficit-strength <float>`: Fraction of G edges forced under-satisfied (needs extension) (default: 0.35)
+- `--noise` / `--noise false`: Enable/disable light noise among unused H vertices (default: true)
+- `--noise-max <number>`: Max multiplicity for noise edges (default: 1)
+- `--seed <number>`: Fixed RNG seed for reproducibility (optional)
+- `--output <path>`: Mandatory. Path to write instance file (pure format: no comments, only two matrices). Stats are printed to stdout.
+- (comments and self-loops removed: generator never outputs headers, omits self-loops)
 
 ## Input Format
 
