@@ -63,25 +63,25 @@ cargo build --release --bin input-generator
 ### Exact Solver
 ```bash
 # Using cargo
-cargo run --release --bin exact-solver -- --input examples/example1.txt --k 2
+cargo run --release --bin exact-solver -- --input examples/example1_3x4.txt --k 2
 
 # Using compiled binary
-./target/release/exact-solver --input examples/example1.txt --k 2
+./target/release/exact-solver --input examples/example1_3x4.txt --k 2
 ```
 
 ### Approximation Solver
 ```bash
 # Using cargo
-cargo run --release --bin approx-solver -- --input examples/example1.txt --k 2
+cargo run --release --bin approx-solver -- --input examples/example1_3x4.txt --k 2
 
 # Using compiled binary
-./target/release/approx-solver --input examples/example1.txt --k 2
+./target/release/approx-solver --input examples/example1_3x4.txt --k 2
 
 # With increased trials for better quality (10x more trials)
-./target/release/approx-solver --input examples/example1.txt --k 2 --trials-multiplier 10
+./target/release/approx-solver --input examples/example1_3x4.txt --k 2 --trials-multiplier 10
 
 # With significantly more trials (100x) for harder problems
-./target/release/approx-solver --input examples/example6_large.txt --k 5 -t 100
+./target/release/approx-solver --input examples/example6_10x25.txt --k 5 -t 100
 ```
 
 ### Input Generator

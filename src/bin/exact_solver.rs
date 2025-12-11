@@ -150,6 +150,7 @@ fn main() {
             println!("==========================================================");
             println!("Minimal total cost: {}", cost);
             println!("Computation time: {:.3} ms", elapsed.as_millis());
+            println!("Computation time: {:.3} ns", elapsed.as_nanos());
             println!();
 
             println!("Adjacency matrix of edges to add to H:");
