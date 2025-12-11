@@ -1,13 +1,13 @@
 use clap::Parser;
 use itertools::Itertools;
-use rayon::prelude::*;
 use minimal_k_isomorphic_subgraph_extension::{
-    Graph, Mapping,
-    parser::parse_input_file,
-    mapping::find_all_mappings,
     cost::{calculate_edge_map, calculate_total_cost},
+    mapping::find_all_mappings,
+    parser::parse_input_file,
     utils::num_combinations,
+    Graph, Mapping,
 };
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -32,18 +32,18 @@ struct Args {
 }
 
 /// Main exact algorithm implementation
-fn exact_minimal_k_extension(
-    g: &Graph,
-    h: &Graph,
-    k: usize,
-) -> Option<SolutionResult> {
+fn exact_minimal_k_extension(g: &Graph, h: &Graph, k: usize) -> Option<SolutionResult> {
     println!("Finding all possible mappings from G to H...");
     let all_mappings = find_all_mappings(g, h);
-    
+
     println!("Found {} total mappings", all_mappings.len());
-    
+
     if all_mappings.len() < k {
-        println!("Error: Not enough mappings found. Need {}, but only found {}", k, all_mappings.len());
+        println!(
+            "Error: Not enough mappings found. Need {}, but only found {}",
+            k,
+            all_mappings.len()
+        );
         return None;
     }
 
@@ -58,31 +58,35 @@ fn exact_minimal_k_extension(
     let best_result: Mutex<Option<(EdgeMap, Vec<Mapping>)>> = Mutex::new(None);
 
     // Parallel iteration over all k-combinations of mappings
-    all_mappings.iter().combinations(k).par_bridge().for_each(|combination| {
-        let edge_map = calculate_edge_map(g, h, &combination);
-        let total_cost = calculate_total_cost(&edge_map);
+    all_mappings
+        .iter()
+        .combinations(k)
+        .par_bridge()
+        .for_each(|combination| {
+            let edge_map = calculate_edge_map(g, h, &combination);
+            let total_cost = calculate_total_cost(&edge_map);
 
-        // Quick check with minimal locking
-        {
-            let current_best = best_cost.lock().unwrap();
-            if total_cost >= *current_best {
-                return; // Not better, skip
+            // Quick check with minimal locking
+            {
+                let current_best = best_cost.lock().unwrap();
+                if total_cost >= *current_best {
+                    return; // Not better, skip
+                }
             }
-        }
 
-        // Found a better solution, update both cost and result
-        {
-            let mut cost_guard = best_cost.lock().unwrap();
-            if total_cost < *cost_guard {
-                *cost_guard = total_cost;
-                drop(cost_guard); // Release cost lock before locking result
-                
-                let mappings = combination.iter().map(|&m| m.clone()).collect();
-                let mut result_guard = best_result.lock().unwrap();
-                *result_guard = Some((edge_map, mappings));
+            // Found a better solution, update both cost and result
+            {
+                let mut cost_guard = best_cost.lock().unwrap();
+                if total_cost < *cost_guard {
+                    *cost_guard = total_cost;
+                    drop(cost_guard); // Release cost lock before locking result
+
+                    let mappings = combination.iter().map(|&m| m.clone()).collect();
+                    let mut result_guard = best_result.lock().unwrap();
+                    *result_guard = Some((edge_map, mappings));
+                }
             }
-        }
-    });
+        });
 
     let search_elapsed = search_start.elapsed();
     println!("Finished evaluating all combinations");
@@ -90,7 +94,7 @@ fn exact_minimal_k_extension(
 
     let final_cost = best_cost.into_inner().unwrap();
     let final_result = best_result.into_inner().unwrap();
-    
+
     if let Some((optimal_edge_set, optimal_mappings)) = final_result {
         return Some((final_cost, optimal_edge_set, optimal_mappings));
     }
@@ -139,24 +143,23 @@ fn main() {
     match exact_minimal_k_extension(&g, &h, args.k) {
         Some((cost, edge_set, mappings)) => {
             let elapsed = start_time.elapsed();
-            
+
             println!();
             println!("==========================================================");
             println!("OPTIMAL SOLUTION FOUND");
             println!("==========================================================");
             println!("Minimal total cost: {}", cost);
-            println!("Computation time: {:.3}s", elapsed.as_secs_f64());
+            println!("Computation time: {:.3} ms", elapsed.as_millis());
             println!();
-            
-            println!("Edges to add to H:");
-            if edge_set.is_empty() {
-                println!("  (no edges needed - H already contains k distinct embeddings of G)");
-            } else {
-                let mut edges: Vec<_> = edge_set.iter().collect();
-                edges.sort_by_key(|(k, _)| *k);
-                for ((u, v), weight) in edges {
-                    println!("  Edge ({} -> {}): add {} edge(s)", u, v, weight);
-                }
+
+            println!("Adjacency matrix of edges to add to H:");
+            let n = h.num_vertices();
+            let mut add_matrix = vec![vec![0usize; n]; n];
+            for ((u, v), weight) in &edge_set {
+                add_matrix[*u][*v] = *weight;
+            }
+            for row in add_matrix {
+                println!("  {:?}", row);
             }
             println!();
 
