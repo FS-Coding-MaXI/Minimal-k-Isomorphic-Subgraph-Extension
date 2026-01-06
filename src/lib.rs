@@ -33,9 +33,9 @@ impl Graph {
 pub type Mapping = Vec<usize>;
 
 // Module declarations
-pub mod parser;
-pub mod mapping;
 pub mod cost;
+pub mod mapping;
+pub mod parser;
 pub mod utils;
 
 #[cfg(test)]

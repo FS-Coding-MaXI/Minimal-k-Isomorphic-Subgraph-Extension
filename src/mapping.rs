@@ -4,7 +4,7 @@ use crate::{Graph, Mapping};
 pub fn find_all_mappings(g: &Graph, h: &Graph) -> Vec<Mapping> {
     let n_g = g.num_vertices();
     let n_h = h.num_vertices();
-    
+
     if n_g > n_h {
         return vec![]; // No valid mappings possible
     }
@@ -45,7 +45,14 @@ fn backtrack(
         if !used_vh[v] {
             current_mapping[vertex_idx] = v;
             used_vh[v] = true;
-            backtrack(vertex_idx + 1, n_g, n_h, current_mapping, used_vh, all_mappings);
+            backtrack(
+                vertex_idx + 1,
+                n_g,
+                n_h,
+                current_mapping,
+                used_vh,
+                all_mappings,
+            );
             used_vh[v] = false;
         }
     }

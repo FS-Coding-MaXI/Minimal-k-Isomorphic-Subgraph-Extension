@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::{Graph, Mapping};
+use std::collections::HashMap;
 
 /// Calculate the edge map needed to implement a set of mappings
 /// Returns a HashMap of (u, v) -> weight representing edges to add
