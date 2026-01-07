@@ -19,11 +19,11 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 }
 
 # Build only (no run)
-cargo build --release --bin approx-solver
+cargo build --release --bin solver
 
 # Paths
-$source = "target\release\approx-solver.exe"
-$destination = ".\approx-solver.exe"
+$source = "target\release\solver.exe"
+$destination = ".\solver.exe"
 
 if (-not (Test-Path $source)) {
     throw "Build succeeded but binary not found at $source"
