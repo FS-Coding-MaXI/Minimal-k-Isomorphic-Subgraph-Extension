@@ -30,14 +30,19 @@ This process guarantees finding the optimal solution because it exhaustively che
 
 ## Project Structure
 
-This project provides two solution approaches:
+This project provides three solver binaries:
 
-- **Exact Solution** (`exact-solver`): Computes the optimal minimal extension using exhaustive search
+- **Interactive TUI Solver** (`solver`): Terminal User Interface with real-time visualization
+  - Supports both exact and approximation algorithms
+  - Shows live progress, mapping visualization, and results
+  - Interactive controls for algorithm selection and execution
+  
+- **Exact Solution** (`exact_solver`): Command-line solver for optimal minimal extension using exhaustive search
   - Complexity: O(k·n₁²·n₂^(k·n₁))
   - Uses parallel processing with Rayon for better performance
   - Guarantees optimal solution
   
-- **Approximation Solution** (`approx-solver`): Provides an approximate solution with polynomial time complexity
+- **Approximation Solution** (`approx_solver`): Command-line solver with polynomial time complexity
   - Complexity: O(k·n₁³·n₂²)
   - Uses Sequential Greedy Extension algorithm with randomized trials
   - Much faster on large inputs, but may not find optimal solution
@@ -45,14 +50,17 @@ This project provides two solution approaches:
 ## Building
 
 ```bash
-# Build all binaries (exact solver, approx solver, input generator)
+# Build all binaries (interactive TUI solver, exact solver, approx solver, input generator)
 cargo build --release
 
+# Build only interactive TUI solver
+cargo build --release --bin solver
+
 # Build only exact solver
-cargo build --release --bin exact-solver
+cargo build --release --bin exact_solver
 
 # Build only approximation solver
-cargo build --release --bin approx-solver
+cargo build --release --bin approx_solver
 
 # Build only input generator
 cargo build --release --bin input-generator
@@ -60,28 +68,48 @@ cargo build --release --bin input-generator
 
 ## Running
 
+### Interactive TUI Solver
+```bash
+# Using cargo
+cargo run --release --bin solver -- --input examples/example1_3x4.txt --k 2
+
+# Using compiled binary
+./target/release/solver --input examples/example1_3x4.txt --k 2
+
+# Choose algorithm interactively
+./target/release/solver --input examples/example1_3x4.txt --k 2 --algorithm exact
+./target/release/solver --input examples/example1_3x4.txt --k 2 --algorithm approx
+```
+
+The TUI solver provides:
+- Real-time progress visualization
+- Mapping table display with color-coded highlights
+- Interactive navigation (arrow keys, page up/down)
+- Detailed statistics and results
+- Choice between exact and approximation algorithms
+
 ### Exact Solver
 ```bash
 # Using cargo
-cargo run --release --bin exact-solver -- --input examples/example1_3x4.txt --k 2
+cargo run --release --bin exact_solver -- --input examples/example1_3x4.txt --k 2
 
 # Using compiled binary
-./target/release/exact-solver --input examples/example1_3x4.txt --k 2
+./target/release/exact_solver --input examples/example1_3x4.txt --k 2
 ```
 
 ### Approximation Solver
 ```bash
 # Using cargo
-cargo run --release --bin approx-solver -- --input examples/example1_3x4.txt --k 2
+cargo run --release --bin approx_solver -- --input examples/example1_3x4.txt --k 2
 
 # Using compiled binary
-./target/release/approx-solver --input examples/example1_3x4.txt --k 2
+./target/release/approx_solver --input examples/example1_3x4.txt --k 2
 
 # With increased trials for better quality (10x more trials)
-./target/release/approx-solver --input examples/example1_3x4.txt --k 2 --trials-multiplier 10
+./target/release/approx_solver --input examples/example1_3x4.txt --k 2 --trials-multiplier 10
 
 # With significantly more trials (100x) for harder problems
-./target/release/approx-solver --input examples/example6_10x25.txt --k 5 -t 100
+./target/release/approx_solver --input examples/example6_10x25.txt --k 5 -t 100
 ```
 
 ### Input Generator
@@ -100,6 +128,11 @@ cargo run --release --bin input-generator -- --n1 4 --n2 10 --noise false --outp
 Generates a problem instance (two graphs G then H) with a partially satisfied hidden embedding; the raw file contains only the numeric format (no comments). Generation statistics are printed to stdout, while the instance itself is always written to the specified output path.
 
 ### Command Line Arguments
+
+**Interactive TUI Solver:**
+- `--input <path>` or `-i <path>`: Path to input file containing graph descriptions
+- `--k <number>` or `-k <number>`: Number of distinct isomorphic mappings required
+- `--algorithm <type>` or `-a <type>`: Algorithm to use (exact, approx, approximate, approximation)
 
 **Exact Solver:**
 - `--input <path>` or `-i <path>`: Path to input file containing graph descriptions

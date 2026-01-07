@@ -5,7 +5,7 @@ Add a Python script to plot approx runtime vs |VH| for fixed k and |VG|
 Figure 2: Execution time of the Approximation Algorithm vs. |VH| for fixed k and |VG|.
 
 This script:
-- Ensures Rust binaries (approx-solver, input-generator) are built
+- Ensures Rust binaries (approx_solver, input-generator) are built
 - Generates problem instances with fixed |VG| = n1 and varying |VH| = n2
 - Benchmarks execution time of the approximation solver for each instance
 - Produces a plot of runtime vs |VH| (n2) for fixed |VG| (n1) and k
@@ -68,7 +68,7 @@ def ensure_built() -> None:
     Build required binaries if not present.
     """
     need_build = False
-    for name in ("approx-solver", "input-generator"):
+    for name in ("approx_solver", "input-generator"):
         if not (BIN_DIR / name).exists():
             need_build = True
             break
@@ -114,7 +114,7 @@ def time_solver_approx(instance_path: Path, k: int, trials_multiplier: int, time
     Time the approximation solver. Returns seconds or None if failure/timeout.
     """
     cmd = [
-        str(BIN_DIR / "approx-solver"),
+        str(BIN_DIR / "approx_solver"),
         "--input", str(instance_path),
         "--k", str(k),
         "--trials-multiplier", str(trials_multiplier),

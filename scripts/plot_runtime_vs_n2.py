@@ -4,7 +4,7 @@ Generate "Figure 1: Log-scale comparison of execution time between Exact and App
 as a function of graph size (|VH| fixed, varying |VG|)."
 
 This script:
-- Builds the Rust project binaries (exact-solver, approx-solver, input-generator)
+- Builds the Rust project binaries (exact_solver, approx_solver, input-generator)
 - Generates problem instances with fixed |VH| = n2 and varying |VG| = n1
 - Benchmarks execution time of both solvers for each instance
 - Produces a log-scale plot comparing runtime vs |VG| (n1) for a fixed |VH| (n2)
@@ -69,7 +69,7 @@ def ensure_built() -> None:
     Build required binaries if not present.
     """
     need_build = False
-    for name in ("exact-solver", "approx-solver", "input-generator"):
+    for name in ("exact_solver", "approx_solver", "input-generator"):
         if not (BIN_DIR / name).exists():
             need_build = True
             break
@@ -117,7 +117,7 @@ def time_solver_exact(instance_path: Path, k: int, timeout_seconds: int) -> Opti
     Time the exact solver. Returns seconds or None if infeasible/timeout/failure.
     """
     cmd = [
-        str(BIN_DIR / "exact-solver"),
+        str(BIN_DIR / "exact_solver"),
         "--input", str(instance_path),
         "--k", str(k),
     ]
@@ -136,7 +136,7 @@ def time_solver_approx(instance_path: Path, k: int, trials_multiplier: int, time
     Time the approximation solver. Returns seconds or None if failure/timeout.
     """
     cmd = [
-        str(BIN_DIR / "approx-solver"),
+        str(BIN_DIR / "approx_solver"),
         "--input", str(instance_path),
         "--k", str(k),
         "--trials-multiplier", str(trials_multiplier),
