@@ -797,7 +797,7 @@ fn render_mappings(f: &mut Frame, app: &AppState, area: Rect) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            line_spans.push(Span::styled(format!("  {}  ", symbol), style));
+            line_spans.push(Span::styled(format!(" {}  ", symbol), style));
         }
 
         if max_col < n_h {
