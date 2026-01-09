@@ -106,13 +106,13 @@ fn generate_graph<R: Rng>(
     rng: &mut R,
 ) -> Vec<Vec<usize>> {
     let mut adj = vec![vec![0usize; n]; n];
-    for i in 0..n {
-        for j in 0..n {
+    for (i, row) in adj.iter_mut().enumerate() {
+        for (j, val) in row.iter_mut().enumerate() {
             if i == j {
                 continue;
             }
             if rng.gen::<f64>() < density {
-                adj[i][j] = random_edge_count(rng, multiedge_prob, max_multiedge);
+                *val = random_edge_count(rng, multiedge_prob, max_multiedge);
             }
         }
     }
@@ -147,12 +147,11 @@ fn adjust_embedding<R: Rng>(
     deficit_strength: f64,
     rng: &mut R,
 ) {
-    let n1 = g.len();
     // Collect list of existing edges in G (i,j) where g[i][j] > 0
     let mut edges: Vec<(usize, usize)> = Vec::new();
-    for i in 0..n1 {
-        for j in 0..n1 {
-            if g[i][j] > 0 {
+    for (i, row) in g.iter().enumerate() {
+        for (j, &val) in row.iter().enumerate() {
+            if val > 0 {
                 edges.push((i, j));
             }
         }

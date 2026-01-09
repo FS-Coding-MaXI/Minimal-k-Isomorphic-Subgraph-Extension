@@ -1,6 +1,8 @@
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -24,7 +26,8 @@ use ratatui::{
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::io;
+use std::fs::File;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
@@ -85,6 +88,11 @@ struct Args {
     /// Number of distinct isomorphic mappings required (k)
     #[arg(short, long)]
     k: usize,
+
+    /// Output file path for results. Default: solution_{algorithm}.txt
+    /// If not specified and graph has >15 vertices, output goes to file automatically.
+    #[arg(short, long)]
+    output_file: Option<PathBuf>,
 }
 
 /// Current view in the TUI
@@ -92,8 +100,7 @@ struct Args {
 enum View {
     Calculating,
     Menu,
-    GraphG,
-    GraphH,
+    Graphs,
     Extension,
     Mappings,
 }
@@ -135,6 +142,9 @@ struct AppState {
     viewport_ext: Viewport,
     viewport_mappings: Viewport,
 
+    // File output
+    output_file: Option<PathBuf>,
+
     // Progress channel
     progress_rx: Receiver<ProgressMessage>,
 }
@@ -147,6 +157,7 @@ impl AppState {
         g: Graph,
         h: Graph,
         k: usize,
+        output_file: Option<PathBuf>,
         progress_rx: Receiver<ProgressMessage>,
     ) -> Self {
         Self {
@@ -170,6 +181,7 @@ impl AppState {
             viewport_h: Viewport::default(),
             viewport_ext: Viewport::default(),
             viewport_mappings: Viewport::default(),
+            output_file,
             progress_rx,
         }
     }
@@ -198,9 +210,25 @@ impl AppState {
                 } => {
                     self.calculating = false;
                     self.cost = Some(cost);
-                    self.edge_map = Some(edge_map);
-                    self.mappings = Some(mappings);
+                    self.edge_map = Some(edge_map.clone());
+                    self.mappings = Some(mappings.clone());
                     self.elapsed = Some(elapsed);
+
+                    // Save to file if output_file is set
+                    if let Some(ref path) = self.output_file {
+                        let _ = write_results_to_file(
+                            path,
+                            &self.g,
+                            &self.h,
+                            self.k,
+                            self.algorithm,
+                            cost,
+                            &edge_map,
+                            &mappings,
+                            elapsed,
+                        );
+                    }
+
                     self.current_view = View::Menu;
                 }
                 ProgressMessage::Error(err) => {
@@ -216,104 +244,79 @@ impl AppState {
         match self.current_view {
             View::Calculating => {}
             View::Menu => match key {
-                KeyCode::Char('g') | KeyCode::Char('G') => self.current_view = View::GraphG,
-                KeyCode::Char('h') | KeyCode::Char('H') => self.current_view = View::GraphH,
+                KeyCode::Char('g') | KeyCode::Char('G') => self.current_view = View::Graphs,
                 KeyCode::Char('e') | KeyCode::Char('E') => self.current_view = View::Extension,
-                KeyCode::Char('m') | KeyCode::Char('M') => self.current_view = View::Mappings,
+                KeyCode::Char('v') | KeyCode::Char('V') => self.current_view = View::Mappings,
                 _ => {}
             },
-            View::GraphG => match key {
-                KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Esc => {
-                    self.current_view = View::Menu
+            View::Graphs => match key {
+                KeyCode::Esc => self.current_view = View::Menu,
+                KeyCode::Tab => {
+                    // Tab switches between scrolling G and H (toggle focus)
+                    // We use a simple swap of offsets to indicate focus change
+                    std::mem::swap(&mut self.viewport_g, &mut self.viewport_h);
+                    std::mem::swap(&mut self.viewport_g, &mut self.viewport_h);
                 }
                 KeyCode::Up => {
-                    self.viewport_g.row_offset = self.viewport_g.row_offset.saturating_sub(1)
+                    self.viewport_g.row_offset = self.viewport_g.row_offset.saturating_sub(1);
+                    self.viewport_h.row_offset = self.viewport_h.row_offset.saturating_sub(1);
                 }
                 KeyCode::Down => {
                     if self.viewport_g.row_offset < self.g.num_vertices().saturating_sub(1) {
                         self.viewport_g.row_offset += 1;
                     }
-                }
-                KeyCode::Left => {
-                    self.viewport_g.col_offset = self.viewport_g.col_offset.saturating_sub(1)
-                }
-                KeyCode::Right => {
-                    if self.viewport_g.col_offset < self.g.num_vertices().saturating_sub(1) {
-                        self.viewport_g.col_offset += 1;
-                    }
-                }
-                KeyCode::Char('[') => {
-                    self.viewport_g.col_offset = self.viewport_g.col_offset.saturating_sub(5)
-                }
-                KeyCode::Char(']') => {
-                    self.viewport_g.col_offset = (self.viewport_g.col_offset + 5)
-                        .min(self.g.num_vertices().saturating_sub(1));
-                }
-                KeyCode::PageUp => {
-                    self.viewport_g.row_offset = self.viewport_g.row_offset.saturating_sub(10)
-                }
-                KeyCode::PageDown => {
-                    self.viewport_g.row_offset = (self.viewport_g.row_offset + 10)
-                        .min(self.g.num_vertices().saturating_sub(1));
-                }
-                KeyCode::Home => {
-                    self.viewport_g.row_offset = 0;
-                    self.viewport_g.col_offset = 0;
-                }
-                KeyCode::End => {
-                    self.viewport_g.row_offset = self.g.num_vertices().saturating_sub(1);
-                    self.viewport_g.col_offset = self.g.num_vertices().saturating_sub(1);
-                }
-                _ => {}
-            },
-            View::GraphH => match key {
-                KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Esc => {
-                    self.current_view = View::Menu
-                }
-                KeyCode::Up => {
-                    self.viewport_h.row_offset = self.viewport_h.row_offset.saturating_sub(1)
-                }
-                KeyCode::Down => {
                     if self.viewport_h.row_offset < self.h.num_vertices().saturating_sub(1) {
                         self.viewport_h.row_offset += 1;
                     }
                 }
                 KeyCode::Left => {
-                    self.viewport_h.col_offset = self.viewport_h.col_offset.saturating_sub(1)
+                    self.viewport_g.col_offset = self.viewport_g.col_offset.saturating_sub(1);
+                    self.viewport_h.col_offset = self.viewport_h.col_offset.saturating_sub(1);
                 }
                 KeyCode::Right => {
+                    if self.viewport_g.col_offset < self.g.num_vertices().saturating_sub(1) {
+                        self.viewport_g.col_offset += 1;
+                    }
                     if self.viewport_h.col_offset < self.h.num_vertices().saturating_sub(1) {
                         self.viewport_h.col_offset += 1;
                     }
                 }
                 KeyCode::Char('[') => {
-                    self.viewport_h.col_offset = self.viewport_h.col_offset.saturating_sub(5)
+                    self.viewport_g.col_offset = self.viewport_g.col_offset.saturating_sub(5);
+                    self.viewport_h.col_offset = self.viewport_h.col_offset.saturating_sub(5);
                 }
                 KeyCode::Char(']') => {
+                    self.viewport_g.col_offset = (self.viewport_g.col_offset + 5)
+                        .min(self.g.num_vertices().saturating_sub(1));
                     self.viewport_h.col_offset = (self.viewport_h.col_offset + 5)
                         .min(self.h.num_vertices().saturating_sub(1));
                 }
                 KeyCode::PageUp => {
-                    self.viewport_h.row_offset = self.viewport_h.row_offset.saturating_sub(10)
+                    self.viewport_g.row_offset = self.viewport_g.row_offset.saturating_sub(10);
+                    self.viewport_h.row_offset = self.viewport_h.row_offset.saturating_sub(10);
                 }
                 KeyCode::PageDown => {
+                    self.viewport_g.row_offset = (self.viewport_g.row_offset + 10)
+                        .min(self.g.num_vertices().saturating_sub(1));
                     self.viewport_h.row_offset = (self.viewport_h.row_offset + 10)
                         .min(self.h.num_vertices().saturating_sub(1));
                 }
                 KeyCode::Home => {
+                    self.viewport_g.row_offset = 0;
+                    self.viewport_g.col_offset = 0;
                     self.viewport_h.row_offset = 0;
                     self.viewport_h.col_offset = 0;
                 }
                 KeyCode::End => {
+                    self.viewport_g.row_offset = self.g.num_vertices().saturating_sub(1);
+                    self.viewport_g.col_offset = self.g.num_vertices().saturating_sub(1);
                     self.viewport_h.row_offset = self.h.num_vertices().saturating_sub(1);
                     self.viewport_h.col_offset = self.h.num_vertices().saturating_sub(1);
                 }
                 _ => {}
             },
             View::Extension => match key {
-                KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Esc => {
-                    self.current_view = View::Menu
-                }
+                KeyCode::Esc => self.current_view = View::Menu,
                 KeyCode::Up => {
                     self.viewport_ext.row_offset = self.viewport_ext.row_offset.saturating_sub(1)
                 }
@@ -355,21 +358,14 @@ impl AppState {
                 _ => {}
             },
             View::Mappings => match key {
-                KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Esc => {
-                    self.current_view = View::Menu
-                }
+                KeyCode::Esc => self.current_view = View::Menu,
                 KeyCode::Left => {
-                    if self.selected_mapping > 0 {
-                        self.selected_mapping -= 1;
-                        self.viewport_mappings.row_offset = 0; // Reset scroll when changing mapping
-                    }
+                    self.viewport_mappings.col_offset =
+                        self.viewport_mappings.col_offset.saturating_sub(1);
                 }
                 KeyCode::Right => {
-                    if let Some(ref mappings) = self.mappings {
-                        if self.selected_mapping < mappings.len() - 1 {
-                            self.selected_mapping += 1;
-                            self.viewport_mappings.row_offset = 0; // Reset scroll when changing mapping
-                        }
+                    if self.viewport_mappings.col_offset < self.h.num_vertices().saturating_sub(1) {
+                        self.viewport_mappings.col_offset += 1;
                     }
                 }
                 KeyCode::Up => {
@@ -381,6 +377,14 @@ impl AppState {
                         self.viewport_mappings.row_offset += 1;
                     }
                 }
+                KeyCode::Char('[') => {
+                    self.viewport_mappings.col_offset =
+                        self.viewport_mappings.col_offset.saturating_sub(5);
+                }
+                KeyCode::Char(']') => {
+                    self.viewport_mappings.col_offset = (self.viewport_mappings.col_offset + 5)
+                        .min(self.h.num_vertices().saturating_sub(1));
+                }
                 KeyCode::PageUp => {
                     self.viewport_mappings.row_offset =
                         self.viewport_mappings.row_offset.saturating_sub(10);
@@ -391,9 +395,29 @@ impl AppState {
                 }
                 KeyCode::Home => {
                     self.viewport_mappings.row_offset = 0;
+                    self.viewport_mappings.col_offset = 0;
                 }
                 KeyCode::End => {
                     self.viewport_mappings.row_offset = self.g.num_vertices().saturating_sub(1);
+                    self.viewport_mappings.col_offset = self.h.num_vertices().saturating_sub(1);
+                }
+                KeyCode::Char(',') | KeyCode::Char('<') => {
+                    // Previous mapping
+                    if self.selected_mapping > 0 {
+                        self.selected_mapping -= 1;
+                        self.viewport_mappings.row_offset = 0;
+                        self.viewport_mappings.col_offset = 0;
+                    }
+                }
+                KeyCode::Char('.') | KeyCode::Char('>') => {
+                    // Next mapping
+                    if let Some(ref mappings) = self.mappings {
+                        if self.selected_mapping < mappings.len() - 1 {
+                            self.selected_mapping += 1;
+                            self.viewport_mappings.row_offset = 0;
+                            self.viewport_mappings.col_offset = 0;
+                        }
+                    }
                 }
                 _ => {}
             },
@@ -509,15 +533,25 @@ fn render_menu(f: &mut Frame, app: &AppState, area: Rect) {
     let elapsed = app.elapsed.unwrap_or(Duration::from_secs(0));
     let mappings_count = app.mappings.as_ref().map(|m| m.len()).unwrap_or(0);
 
-    let results_text = format!(
-        "Cost: {} edges  │  Time: {}ms  │  Mappings: {}",
-        cost,
-        elapsed.as_millis(),
-        mappings_count
-    );
+    let mut results_lines = vec![Line::from(Span::styled(
+        format!(
+            "Cost: {} edges  │  Time: {}ms  │  Mappings: {}",
+            cost,
+            elapsed.as_millis(),
+            mappings_count
+        ),
+        Style::default().fg(Color::Yellow),
+    ))];
 
-    let results = Paragraph::new(results_text)
-        .style(Style::default().fg(Color::Yellow))
+    if let Some(ref path) = app.output_file {
+        results_lines.push(Line::from(""));
+        results_lines.push(Line::from(Span::styled(
+            format!("✓ Results saved to: {}", path.display()),
+            Style::default().fg(Color::Green),
+        )));
+    }
+
+    let results = Paragraph::new(results_lines)
         .alignment(Alignment::Center)
         .block(
             Block::default()
@@ -528,10 +562,9 @@ fn render_menu(f: &mut Frame, app: &AppState, area: Rect) {
 
     // Menu options
     let menu_items = vec![
-        ListItem::new("  [G] View Graph G adjacency matrix"),
-        ListItem::new("  [H] View Graph H adjacency matrix"),
+        ListItem::new("  [G] View Graphs G and H adjacency matrices"),
         ListItem::new("  [E] View Extension (edges to add to H)"),
-        ListItem::new(format!("  [M] View Mappings ({} found)", mappings_count)),
+        ListItem::new(format!("  [V] View Mappings ({} found)", mappings_count)),
         ListItem::new(""),
         ListItem::new("  [Q] Quit"),
     ];
@@ -545,115 +578,6 @@ fn render_menu(f: &mut Frame, app: &AppState, area: Rect) {
                 .title(" Menu "),
         );
     f.render_widget(menu, chunks[2]);
-}
-
-/// Render a graph adjacency matrix with scrolling
-fn render_graph_matrix(f: &mut Frame, graph: &Graph, viewport: &Viewport, title: &str, area: Rect) {
-    let n = graph.num_vertices();
-
-    // Calculate visible rows/cols based on terminal size
-    // Each row needs 1 line, subtract overhead for borders, header, footer (~ 8 lines)
-    let rows_visible = (area.height.saturating_sub(8) as usize).max(5);
-    // Each column needs ~6 chars, subtract space for row label (4 chars)
-    let cols_visible = ((area.width.saturating_sub(8)) / 6).max(5) as usize;
-
-    // Clamp viewport offsets to valid range
-    let row_offset = viewport.row_offset.min(n.saturating_sub(1));
-    let col_offset = viewport.col_offset.min(n.saturating_sub(1));
-
-    let max_row = row_offset + rows_visible.min(n - row_offset);
-    let max_col = col_offset + cols_visible.min(n - col_offset);
-
-    // Build matrix text
-    let mut lines = vec![];
-
-    // Header line with column numbers
-    let mut header = String::from("     ");
-    for col in col_offset..max_col {
-        header.push_str(&format!("{:4}", col));
-    }
-    if max_col < n {
-        header.push_str("  ...");
-    }
-    lines.push(Line::from(Span::styled(
-        header,
-        Style::default().fg(Color::Cyan),
-    )));
-
-    // Matrix rows
-    for row in row_offset..max_row {
-        let mut line_spans = vec![Span::styled(
-            format!("{:3}│", row),
-            Style::default().fg(Color::Cyan),
-        )];
-
-        for col in col_offset..max_col {
-            let value = graph.get_edge(row, col);
-            let style = if value > 0 {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            line_spans.push(Span::styled(format!("{:4}", value), style));
-        }
-
-        if max_col < n {
-            line_spans.push(Span::styled("  ...", Style::default().fg(Color::DarkGray)));
-        }
-
-        lines.push(Line::from(line_spans));
-    }
-
-    if max_row < n {
-        lines.push(Line::from(Span::styled(
-            "  ...",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    // Navigation info under the matrix
-    lines.push(Line::from(""));
-    if n > rows_visible || n > cols_visible {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Viewing rows {}-{}, cols {}-{} of {}x{}",
-                row_offset,
-                max_row.saturating_sub(1),
-                col_offset,
-                max_col.saturating_sub(1),
-                n,
-                n
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(Span::styled(
-            "[↑↓←→] Scroll  [PgUp/Dn] Jump rows  [[/]] Jump cols  [Home/End] First/Last",
-            Style::default().fg(Color::Magenta),
-        )));
-    }
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(format!(" {} ", title)),
-        )
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
-
-    // Navigation hint at bottom
-    let hint_area = Rect {
-        x: area.x,
-        y: area.y + area.height - 1,
-        width: area.width,
-        height: 1,
-    };
-    let hint = Paragraph::new("[M] Menu  [Q] Quit")
-        .style(Style::default().fg(Color::Magenta))
-        .alignment(Alignment::Center);
-    f.render_widget(hint, hint_area);
 }
 
 /// Render the extension view (original+added format)
@@ -764,6 +688,13 @@ fn render_extension(f: &mut Frame, app: &AppState, area: Rect) {
         )));
     }
 
+    // Add hint to the content
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "[Esc] Menu  [Q] Quit",
+        Style::default().fg(Color::Magenta),
+    )));
+
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
@@ -774,18 +705,6 @@ fn render_extension(f: &mut Frame, app: &AppState, area: Rect) {
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
-
-    // Navigation hint at bottom
-    let hint_area = Rect {
-        x: area.x,
-        y: area.y + area.height - 1,
-        width: area.width,
-        height: 1,
-    };
-    let hint = Paragraph::new("[M] Menu  [Q] Quit")
-        .style(Style::default().fg(Color::Magenta))
-        .alignment(Alignment::Center);
-    f.render_widget(hint, hint_area);
 }
 
 /// Render the mappings view
@@ -793,7 +712,8 @@ fn render_mappings(f: &mut Frame, app: &AppState, area: Rect) {
     let mappings = app.mappings.as_ref().unwrap();
     let current_idx = app.selected_mapping;
     let mapping = &mappings[current_idx];
-    let n = mapping.len();
+    let n_g = mapping.len();
+    let n_h = app.h.num_vertices();
     let viewport = &app.viewport_mappings;
 
     let mut lines = vec![];
@@ -811,75 +731,136 @@ fn render_mappings(f: &mut Frame, app: &AppState, area: Rect) {
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "This mapping shows how vertices from G map to H:",
+        "Permutation Matrix - Each row shows where G vertex maps to in H",
         Style::default().fg(Color::Gray),
     )));
     lines.push(Line::from(""));
 
-    // Table header
+    // Calculate visible rows/cols based on terminal size
+    let rows_visible = (area.height.saturating_sub(16) as usize).max(3);
+    let cols_visible = ((area.width.saturating_sub(16)) / 4).max(5) as usize;
+
+    let row_offset = viewport.row_offset.min(n_g.saturating_sub(1));
+    let col_offset = viewport.col_offset.min(n_h.saturating_sub(1));
+
+    let max_row = row_offset + rows_visible.min(n_g.saturating_sub(row_offset));
+    let max_col = col_offset + cols_visible.min(n_h.saturating_sub(col_offset));
+
+    // Header line with H vertex numbers
+    let mut header = String::from("   H vertices: ");
+    for col in col_offset..max_col {
+        header.push_str(&format!("{:3} ", col));
+    }
+    if max_col < n_h {
+        header.push_str(" ...");
+    }
     lines.push(Line::from(Span::styled(
-        "   G vertex  →  H vertex",
+        header,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )));
+
+    // Separator line
+    let mut separator = String::from("               ┌");
+    for _ in col_offset..max_col {
+        separator.push_str("────");
+    }
     lines.push(Line::from(Span::styled(
-        "  ──────────────────────",
+        separator,
         Style::default().fg(Color::DarkGray),
     )));
 
-    // Calculate viewport bounds based on terminal size
-    let rows_visible = (area.height.saturating_sub(15) as usize).max(5);
-    let max_row = viewport.row_offset + rows_visible.min(n - viewport.row_offset);
-
-    // Mapping entries (only visible rows)
-    for (g_vertex, &h_vertex) in mapping
-        .iter()
-        .enumerate()
-        .skip(viewport.row_offset)
-        .take(max_row - viewport.row_offset)
-    {
-        lines.push(Line::from(vec![
-            Span::styled("      ", Style::default()),
+    // Matrix rows
+    for (idx, &h_vertex) in mapping.iter().enumerate().skip(row_offset).take(max_row - row_offset) {
+        let g_vertex = row_offset + idx;
+        let mut line_spans = vec![
             Span::styled(
-                format!("{:<4}", g_vertex),
+                format!("   G[{:2}] → {:2}  ", g_vertex, h_vertex),
                 Style::default().fg(Color::Green),
             ),
-            Span::styled("  →   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{:<4}", h_vertex),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]));
+            Span::styled("│", Style::default().fg(Color::DarkGray)),
+        ];
+
+        for col in col_offset..max_col {
+            let symbol = if col == h_vertex {
+                "◉" // Filled circle for the mapping
+            } else {
+                "·" // Middle dot for empty cells
+            };
+
+            let style = if col == h_vertex {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            line_spans.push(Span::styled(format!("  {}  ", symbol), style));
+        }
+
+        if max_col < n_h {
+            line_spans.push(Span::styled("  ·", Style::default().fg(Color::DarkGray)));
+        }
+
+        lines.push(Line::from(line_spans));
     }
 
     // Show ellipsis if there are more rows
-    if max_row < n {
+    if max_row < n_g {
         lines.push(Line::from(Span::styled(
-            "      ...",
+            "               │  ...",
             Style::default().fg(Color::DarkGray),
         )));
     }
 
-    // Navigation info under the mapping
+    // Footer separator
+    let mut footer_sep = String::from("               └");
+    for _ in col_offset..max_col {
+        footer_sep.push_str("────");
+    }
+    lines.push(Line::from(Span::styled(
+        footer_sep,
+        Style::default().fg(Color::DarkGray),
+    )));
+
     lines.push(Line::from(""));
-    if n > rows_visible {
+
+    // Legend
+    lines.push(Line::from(vec![
+        Span::styled("   ◉ = mapped    ", Style::default().fg(Color::Yellow)),
+        Span::styled("· = not mapped", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    // Navigation info
+    lines.push(Line::from(""));
+    if n_g > rows_visible || n_h > cols_visible {
         lines.push(Line::from(Span::styled(
             format!(
-                "Showing rows {}-{} of {}",
-                viewport.row_offset,
+                "   Viewing rows {}-{}, cols {}-{} of {}x{}",
+                row_offset,
                 max_row.saturating_sub(1),
-                n
+                col_offset,
+                max_col.saturating_sub(1),
+                n_g,
+                n_h
             ),
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(Span::styled(
-            "[↑↓/PgUp/PgDn] Scroll  [Home/End] First/Last",
+            "   [↑↓←→] Scroll  [PgUp/Dn] Jump rows  [[/]] Jump cols  [Home/End] First/Last",
             Style::default().fg(Color::Magenta),
         )));
     }
+
     lines.push(Line::from(Span::styled(
-        "[←/→] Switch mapping",
+        "   [</,] Previous  [>/.]  Next mapping",
+        Style::default().fg(Color::Magenta),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "   [Esc] Menu  [Q] Quit",
         Style::default().fg(Color::Magenta),
     )));
 
@@ -887,22 +868,140 @@ fn render_mappings(f: &mut Frame, app: &AppState, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
-            .title(format!(" Found Mappings (k={}) ", app.k)),
+            .title(format!(" Permutation Matrix (k={}) ", app.k)),
     );
 
     f.render_widget(paragraph, area);
+}
+
+/// Render combined graphs view (G and H side by side)
+fn render_graphs_combined(f: &mut Frame, app: &AppState, area: Rect) {
+    // Split vertically: main content and hint bar at bottom
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(1)])
+        .split(area);
+
+    // Split horizontally for G and H
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(main_chunks[0]);
+
+    render_graph_matrix_panel(
+        f,
+        &app.g,
+        &app.viewport_g,
+        "Graph G Adjacency Matrix",
+        chunks[0],
+    );
+    render_graph_matrix_panel(
+        f,
+        &app.h,
+        &app.viewport_h,
+        "Graph H Adjacency Matrix",
+        chunks[1],
+    );
 
     // Navigation hint at bottom
-    let hint_area = Rect {
-        x: area.x,
-        y: area.y + area.height - 1,
-        width: area.width,
-        height: 1,
-    };
-    let hint = Paragraph::new("[M] Menu  [Q] Quit")
+    let hint = Paragraph::new("[Esc] Menu  [Q] Quit")
         .style(Style::default().fg(Color::Magenta))
         .alignment(Alignment::Center);
-    f.render_widget(hint, hint_area);
+    f.render_widget(hint, main_chunks[1]);
+}
+
+/// Render a graph adjacency matrix panel (for combined view)
+fn render_graph_matrix_panel(
+    f: &mut Frame,
+    graph: &Graph,
+    viewport: &Viewport,
+    title: &str,
+    area: Rect,
+) {
+    let n = graph.num_vertices();
+
+    // Calculate visible rows/cols based on panel size
+    let rows_visible = (area.height.saturating_sub(6) as usize).max(3);
+    let cols_visible = ((area.width.saturating_sub(6)) / 5).max(3) as usize;
+
+    let row_offset = viewport.row_offset.min(n.saturating_sub(1));
+    let col_offset = viewport.col_offset.min(n.saturating_sub(1));
+
+    let max_row = row_offset + rows_visible.min(n.saturating_sub(row_offset));
+    let max_col = col_offset + cols_visible.min(n.saturating_sub(col_offset));
+
+    let mut lines = vec![];
+
+    // Header line with column numbers
+    let mut header = String::from("    ");
+    for col in col_offset..max_col {
+        header.push_str(&format!("{:4}", col));
+    }
+    if max_col < n {
+        header.push_str(" ...");
+    }
+    lines.push(Line::from(Span::styled(
+        header,
+        Style::default().fg(Color::Cyan),
+    )));
+
+    // Matrix rows
+    for row in row_offset..max_row {
+        let mut line_spans = vec![Span::styled(
+            format!("{:3}│", row),
+            Style::default().fg(Color::Cyan),
+        )];
+
+        for col in col_offset..max_col {
+            let value = graph.get_edge(row, col);
+            let style = if value > 0 {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            line_spans.push(Span::styled(format!("{:4}", value), style));
+        }
+
+        if max_col < n {
+            line_spans.push(Span::styled(" ...", Style::default().fg(Color::DarkGray)));
+        }
+
+        lines.push(Line::from(line_spans));
+    }
+
+    if max_row < n {
+        lines.push(Line::from(Span::styled(
+            "  ...",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // Navigation info
+    if n > rows_visible || n > cols_visible {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "[{}-{}, {}-{}] of {}x{}",
+                row_offset,
+                max_row.saturating_sub(1),
+                col_offset,
+                max_col.saturating_sub(1),
+                n,
+                n
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(format!(" {} ", title)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
 }
 
 /// Main UI rendering
@@ -912,12 +1011,7 @@ fn ui(f: &mut Frame, app: &AppState) {
     match app.current_view {
         View::Calculating => render_calculating(f, app, size),
         View::Menu => render_menu(f, app, size),
-        View::GraphG => {
-            render_graph_matrix(f, &app.g, &app.viewport_g, "Graph G Adjacency Matrix", size)
-        }
-        View::GraphH => {
-            render_graph_matrix(f, &app.h, &app.viewport_h, "Graph H Adjacency Matrix", size)
-        }
+        View::Graphs => render_graphs_combined(f, app, size),
         View::Extension => render_extension(f, app, size),
         View::Mappings => render_mappings(f, app, size),
     }
@@ -1212,6 +1306,188 @@ fn approximate_best_mapping(
     best_global_mapping.map(|m| (m, best_edges_to_add))
 }
 
+/// Write results to a file
+#[allow(clippy::too_many_arguments)]
+fn write_results_to_file(
+    path: &PathBuf,
+    g: &Graph,
+    h: &Graph,
+    k: usize,
+    algorithm: Algorithm,
+    cost: usize,
+    edge_map: &EdgeMap,
+    mappings: &[Mapping],
+    elapsed: Duration,
+) -> io::Result<()> {
+    let mut file = File::create(path)?;
+
+    // Header
+    writeln!(
+        file,
+        "============================================================"
+    )?;
+    writeln!(
+        file,
+        "Minimal k-Isomorphic Subgraph Extension - Solution Report"
+    )?;
+    writeln!(
+        file,
+        "============================================================"
+    )?;
+    writeln!(file)?;
+
+    // Algorithm info
+    writeln!(
+        file,
+        "Algorithm: {}",
+        match algorithm {
+            Algorithm::Exact => "Exact",
+            Algorithm::Approx => "Approximation",
+        }
+    )?;
+    writeln!(file, "k (required mappings): {}", k)?;
+    writeln!(file, "Time: {}ms", elapsed.as_millis())?;
+    writeln!(file, "Total Cost (edges added): {}", cost)?;
+    writeln!(file)?;
+
+    // Graph info
+    writeln!(
+        file,
+        "------------------------------------------------------------"
+    )?;
+    writeln!(file, "Graph G (pattern): {} vertices", g.num_vertices())?;
+    writeln!(
+        file,
+        "------------------------------------------------------------"
+    )?;
+    writeln!(file, "Adjacency Matrix:")?;
+    for i in 0..g.num_vertices() {
+        let row: Vec<String> = (0..g.num_vertices())
+            .map(|j| format!("{:3}", g.get_edge(i, j)))
+            .collect();
+        writeln!(file, "  {}: [{}]", i, row.join(", "))?;
+    }
+    writeln!(file)?;
+
+    // Graph H
+    writeln!(
+        file,
+        "------------------------------------------------------------"
+    )?;
+    writeln!(file, "Graph H (host): {} vertices", h.num_vertices())?;
+    writeln!(
+        file,
+        "------------------------------------------------------------"
+    )?;
+    writeln!(file, "Adjacency Matrix:")?;
+    for i in 0..h.num_vertices() {
+        let row: Vec<String> = (0..h.num_vertices())
+            .map(|j| format!("{:3}", h.get_edge(i, j)))
+            .collect();
+        writeln!(file, "  {}: [{}]", i, row.join(", "))?;
+    }
+    writeln!(file)?;
+
+    // Extended H matrix
+    writeln!(file, "Extended H Matrix (original + added):")?;
+    for i in 0..h.num_vertices() {
+        let row: Vec<String> = (0..h.num_vertices())
+            .map(|j| {
+                let original = h.get_edge(i, j);
+                let added = edge_map.get(&(i, j)).copied().unwrap_or(0);
+                if added > 0 {
+                    format!("{:3}+{}", original, added)
+                } else {
+                    format!("{:5}", original)
+                }
+            })
+            .collect();
+        writeln!(file, "  {}: [{}]", i, row.join(", "))?;
+    }
+    writeln!(file)?;
+
+    // Mappings
+    writeln!(
+        file,
+        "------------------------------------------------------------"
+    )?;
+    writeln!(file, "Mappings (Permutation Matrix Format)")?;
+    writeln!(
+        file,
+        "------------------------------------------------------------"
+    )?;
+    for (idx, mapping) in mappings.iter().enumerate() {
+        writeln!(file, "\nMapping {} of {}:", idx + 1, mappings.len())?;
+        writeln!(
+            file,
+            "Permutation Matrix - G vertices (rows) to H vertices (columns)"
+        )?;
+        writeln!(file)?;
+
+        // Header with H vertex numbers
+        write!(file, "  H vertices: ")?;
+        for h in 0..h.num_vertices() {
+            write!(file, "{:2} ", h)?;
+        }
+        writeln!(file)?;
+
+        // Top border
+        write!(file, "              ┌")?;
+        for _ in 0..h.num_vertices() {
+            write!(file, "───")?;
+        }
+        writeln!(file)?;
+
+        // Matrix rows
+        for (g_vertex, &h_vertex) in mapping.iter().enumerate() {
+            write!(file, "  G[{:2}] → {:2}  │", g_vertex, h_vertex)?;
+            for h in 0..h.num_vertices() {
+                if h == h_vertex {
+                    write!(file, "◉ ")?; // Filled circle for mapping
+                } else {
+                    write!(file, "· ")?; // Middle dot for empty
+                }
+            }
+            writeln!(file)?;
+        }
+
+        // Bottom border
+        write!(file, "              └")?;
+        for _ in 0..h.num_vertices() {
+            write!(file, "───")?;
+        }
+        writeln!(file)?;
+
+        writeln!(file)?;
+        writeln!(file, "  ◉ = mapped    · = not mapped")?;
+
+        // Also include simple list for reference
+        writeln!(file)?;
+        writeln!(file, "  Mapping list: G[vertex] → H[vertex]")?;
+        for (g_vertex, &h_vertex) in mapping.iter().enumerate() {
+            write!(file, "    G[{}]→H[{}]", g_vertex, h_vertex)?;
+            if (g_vertex + 1) % 8 == 0 || g_vertex == mapping.len() - 1 {
+                writeln!(file)?;
+            } else {
+                write!(file, "  ")?;
+            }
+        }
+        writeln!(file)?;
+    }
+
+    writeln!(
+        file,
+        "\n============================================================"
+    )?;
+    writeln!(file, "End of Report")?;
+    writeln!(
+        file,
+        "============================================================"
+    )?;
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -1230,6 +1506,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    // Determine if we should save to file
+    // Save to file if: either graph has >15 vertices OR --output-file was specified
+    let output_file =
+        if g.num_vertices() > 15 || h.num_vertices() > 15 || args.output_file.is_some() {
+            Some(args.output_file.unwrap_or_else(|| {
+                let algo_name = match args.algorithm {
+                    Algorithm::Exact => "exact",
+                    Algorithm::Approx => "approx",
+                };
+                PathBuf::from(format!("solution_{}.txt", algo_name))
+            }))
+        } else {
+            None
+        };
+
+    // Always use interactive TUI
     // Create channel for progress updates
     let (tx, rx) = channel();
 
@@ -1252,7 +1544,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = AppState::new(args.algorithm, g, h, args.k, rx);
+    let mut app = AppState::new(args.algorithm, g, h, args.k, output_file, rx);
 
     // Main loop
     let tick_rate = Duration::from_millis(100);
@@ -1267,6 +1559,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
+                // Only handle key press events, not release (fixes Windows double-trigger)
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => {
                         if app.current_view != View::Calculating {
