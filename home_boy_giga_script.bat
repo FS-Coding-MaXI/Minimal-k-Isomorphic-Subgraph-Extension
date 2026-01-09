@@ -1,2 +1,1 @@
-powershell home_boy_script.ps1
-
+powershell -File .\home_boy_script.ps1
